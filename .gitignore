@@ -1,0 +1,12 @@
+.DS_Store
+build/
+cmake-build-*/
+*.o
+*.obj
+*.exe
+*.app
+*.dSYM/
+*.dmg
+*.pkg
+*.msi
+_CPack_Packages/

@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Derive version
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ -z "$version" || "$version" == "$GITHUB_REF_NAME" ]]; then
+            echo "Tag must be v-prefixed, got: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          cat > release-notes.md <<EOF
+          Keebtype ${VERSION}
+
+          Unsigned installer build.
+
+          macOS users may see Gatekeeper warnings because this build is not Developer ID signed or notarized yet.
+          Windows users may see SmartScreen warnings because this build is not code signed yet.
+          EOF
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --draft=true \
+              --title "Keebtype ${VERSION}" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG_NAME" \
+              --draft \
+              --title "Keebtype ${VERSION}" \
+              --notes-file release-notes.md
+          fi
+
+  build-macos:
+    name: Build macOS arm64 DMG
+    needs: prepare-release
+    runs-on: macos-15
+    env:
+      VERSION: ${{ needs.prepare-release.outputs.version }}
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DKEEBTYPE_VERSION="$VERSION" -DCMAKE_OSX_ARCHITECTURES=arm64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -C Release
+
+      - name: Package DMG
+        run: cpack --config build/CPackConfig.cmake -G DragNDrop -C Release
+
+      - name: Verify DMG contents
+        shell: bash
+        run: |
+          dmg="build/Keebtype-${VERSION}-macos-arm64.dmg"
+          mount_point="$RUNNER_TEMP/keebtype-dmg"
+          mkdir -p "$mount_point"
+          hdiutil attach "$dmg" -mountpoint "$mount_point" -nobrowse -quiet
+          test -d "$mount_point/Keebtype.app/Contents/Resources/soundpacks/cherrymx-brown-abs"
+          hdiutil detach "$mount_point" -quiet
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          cd build
+          shasum -a 256 "Keebtype-${VERSION}-macos-arm64.dmg" > "Keebtype-${VERSION}-macos-arm64.dmg.sha256"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "$TAG_NAME" \
+            "build/Keebtype-${VERSION}-macos-arm64.dmg" \
+            "build/Keebtype-${VERSION}-macos-arm64.dmg.sha256" \
+            --clobber
+
+  build-windows:
+    name: Build Windows x64 NSIS installer
+    needs: prepare-release
+    runs-on: windows-2022
+    env:
+      VERSION: ${{ needs.prepare-release.outputs.version }}
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        shell: pwsh
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DKEEBTYPE_VERSION="$env:VERSION"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build --output-on-failure -C Release
+
+      - name: Package installer
+        shell: pwsh
+        run: cpack --config build/CPackConfig.cmake -G NSIS -C Release
+
+      - name: Verify installer exists
+        shell: pwsh
+        run: |
+          $installer = "build\Keebtype-$env:VERSION-windows-x64-setup.exe"
+          if (!(Test-Path $installer)) {
+            throw "Missing installer: $installer"
+          }
+
+      - name: Verify silent install contents
+        shell: pwsh
+        run: |
+          $installer = Resolve-Path "build\Keebtype-$env:VERSION-windows-x64-setup.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "keebtype-install"
+          if (Test-Path $installDir) {
+            Remove-Item -Recurse -Force $installDir
+          }
+          $process = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Silent install failed with exit code $($process.ExitCode)"
+          }
+          if (!(Test-Path (Join-Path $installDir "keebtype.exe"))) {
+            throw "Installed keebtype.exe is missing"
+          }
+          if (!(Test-Path (Join-Path $installDir "soundpacks\cherrymx-brown-abs\config.json"))) {
+            throw "Installed soundpack config is missing"
+          }
+          if (!(Test-Path (Join-Path $installDir "soundpacks\cherrymx-brown-abs\sound.ogg"))) {
+            throw "Installed soundpack audio is missing"
+          }
+
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $installer = "build\Keebtype-$env:VERSION-windows-x64-setup.exe"
+          $hash = Get-FileHash -Algorithm SHA256 $installer
+          "$($hash.Hash.ToLower())  $(Split-Path -Leaf $installer)" | Set-Content "$installer.sha256"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release upload "$env:TAG_NAME" `
+            "build\Keebtype-$env:VERSION-windows-x64-setup.exe" `
+            "build\Keebtype-$env:VERSION-windows-x64-setup.exe.sha256" `
+            --clobber
+
+  publish-release:
+    name: Publish release
+    needs:
+      - prepare-release
+      - build-macos
+      - build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release edit "$TAG_NAME" --draft=false
