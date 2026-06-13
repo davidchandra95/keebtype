@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   prepare-release:
     name: Prepare release
