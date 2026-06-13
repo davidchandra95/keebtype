@@ -1,7 +1,7 @@
 #include "keebtype/tray/tray_app.hpp"
 
-#include <shellapi.h>
 #include <windows.h>
+#include <shellapi.h>
 
 #include <array>
 #include <memory>
