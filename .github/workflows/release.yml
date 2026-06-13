@@ -41,7 +41,8 @@ jobs:
 
           Unsigned installer build.
 
-          macOS users may see Gatekeeper warnings because this build is not Developer ID signed or notarized yet.
+          macOS app bundle is ad-hoc signed for bundle integrity, but it is not Developer ID signed or notarized yet.
+          macOS users may still see Gatekeeper warnings.
           Windows users may see SmartScreen warnings because this build is not code signed yet.
           EOF
 
@@ -88,6 +89,7 @@ jobs:
           mkdir -p "$mount_point"
           hdiutil attach "$dmg" -mountpoint "$mount_point" -nobrowse -quiet
           test -d "$mount_point/Keebtype.app/Contents/Resources/soundpacks/cherrymx-brown-abs"
+          codesign --verify --deep --strict --verbose=4 "$mount_point/Keebtype.app"
           hdiutil detach "$mount_point" -quiet
 
       - name: Generate checksum

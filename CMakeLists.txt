@@ -121,6 +121,8 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E rm -f
       "$<TARGET_BUNDLE_DIR:keebtype>/Contents/Resources/soundpacks/.DS_Store"
       "$<TARGET_BUNDLE_DIR:keebtype>/Contents/Resources/soundpacks/cherrymx-brown-abs/.DS_Store"
+    COMMAND /usr/bin/xattr -cr "$<TARGET_BUNDLE_DIR:keebtype>"
+    COMMAND /usr/bin/codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:keebtype>"
   )
 elseif(WIN32)
   target_sources(keebtype PRIVATE
@@ -150,12 +152,7 @@ install(TARGETS keebtype
   RUNTIME DESTINATION .
 )
 
-if(APPLE)
-  install(DIRECTORY soundpacks
-    DESTINATION "Keebtype.app/Contents/Resources"
-    PATTERN ".DS_Store" EXCLUDE
-  )
-else()
+if(NOT APPLE)
   install(DIRECTORY soundpacks
     DESTINATION .
     PATTERN ".DS_Store" EXCLUDE
