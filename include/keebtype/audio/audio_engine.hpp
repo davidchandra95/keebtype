@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #include "keebtype/audio/mixer.hpp"
@@ -14,6 +15,19 @@ namespace keebtype {
 
 class AudioEngine {
  public:
+  struct PreparedSoundpack {
+    DecodedAudio audio;
+    ResolvedSoundpack soundpack;
+    std::string soundpack_name;
+  };
+
+  struct PrepareResult {
+    std::optional<PreparedSoundpack> prepared;
+    std::string error;
+
+    [[nodiscard]] bool ok() const noexcept { return prepared.has_value(); }
+  };
+
   struct InitResult {
     std::unique_ptr<AudioEngine> engine;
     std::string error;
@@ -21,7 +35,9 @@ class AudioEngine {
     [[nodiscard]] bool ok() const noexcept { return engine != nullptr; }
   };
 
+  static PrepareResult prepare(const Soundpack& soundpack);
   static InitResult create(const Soundpack& soundpack);
+  static InitResult create(PreparedSoundpack prepared);
 
   AudioEngine(const AudioEngine&) = delete;
   AudioEngine& operator=(const AudioEngine&) = delete;

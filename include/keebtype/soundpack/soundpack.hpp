@@ -21,6 +21,7 @@ struct Soundpack {
   std::filesystem::path sound_file;
   std::string id;
   std::string name;
+  int version = 1;
   bool is_default = false;
   std::unordered_map<int, SoundSliceConfig> slices;
 };
@@ -58,4 +59,3 @@ ResolveSoundpackResult resolveSoundpackSlices(
     std::uint64_t total_frames);
 
 }  // namespace keebtype
-

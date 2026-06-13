@@ -33,6 +33,15 @@ void addCandidate(std::vector<std::filesystem::path>* candidates, const std::fil
   candidates->push_back((root / "soundpacks" / "cherrymx-brown-abs").lexically_normal());
 }
 
+void addSoundpackRootCandidate(
+    std::vector<std::filesystem::path>* candidates,
+    const std::filesystem::path& root) {
+  if (root.empty()) {
+    return;
+  }
+  candidates->push_back((root / "soundpacks").lexically_normal());
+}
+
 void addMacBundleCandidates(std::vector<std::filesystem::path>* candidates, const std::filesystem::path& exe_dir) {
 #if defined(__APPLE__)
   const auto contents_dir = exe_dir.parent_path();
@@ -43,6 +52,28 @@ void addMacBundleCandidates(std::vector<std::filesystem::path>* candidates, cons
   (void)candidates;
   (void)exe_dir;
 #endif
+}
+
+void addMacBundleRootCandidates(
+    std::vector<std::filesystem::path>* candidates,
+    const std::filesystem::path& exe_dir) {
+#if defined(__APPLE__)
+  const auto contents_dir = exe_dir.parent_path();
+  if (contents_dir.filename() == "Contents") {
+    addSoundpackRootCandidate(candidates, contents_dir / "Resources");
+  }
+#else
+  (void)candidates;
+  (void)exe_dir;
+#endif
+}
+
+std::filesystem::path envPath(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || value[0] == '\0') {
+    return {};
+  }
+  return std::filesystem::path(value);
 }
 
 }  // namespace
@@ -74,6 +105,52 @@ std::filesystem::path executablePath(const char* argv0) {
     return absoluteIfPossible(argv0);
   }
   return {};
+}
+
+std::filesystem::path userDataDir() {
+#if defined(_WIN32)
+  const auto app_data = envPath("APPDATA");
+  if (!app_data.empty()) {
+    return (app_data / "Keebtype").lexically_normal();
+  }
+  const auto user_profile = envPath("USERPROFILE");
+  if (!user_profile.empty()) {
+    return (user_profile / "AppData" / "Roaming" / "Keebtype").lexically_normal();
+  }
+#elif defined(__APPLE__)
+  const auto home = envPath("HOME");
+  if (!home.empty()) {
+    return (home / "Library" / "Application Support" / "Keebtype").lexically_normal();
+  }
+#else
+  const auto xdg_config_home = envPath("XDG_CONFIG_HOME");
+  if (!xdg_config_home.empty()) {
+    return (xdg_config_home / "Keebtype").lexically_normal();
+  }
+  const auto home = envPath("HOME");
+  if (!home.empty()) {
+    return (home / ".config" / "Keebtype").lexically_normal();
+  }
+#endif
+
+  return (std::filesystem::current_path() / ".keebtype").lexically_normal();
+}
+
+std::vector<std::filesystem::path> candidateBundledSoundpackRoots(const char* argv0) {
+  std::vector<std::filesystem::path> candidates;
+  addSoundpackRootCandidate(&candidates, std::filesystem::current_path());
+
+  const auto exe = executablePath(argv0);
+  if (!exe.empty()) {
+    auto dir = exe.parent_path();
+    addMacBundleRootCandidates(&candidates, dir);
+    for (int depth = 0; depth < 4 && !dir.empty(); ++depth) {
+      addSoundpackRootCandidate(&candidates, dir);
+      dir = dir.parent_path();
+    }
+  }
+
+  return candidates;
 }
 
 std::vector<std::filesystem::path> candidateSoundpackRoots(const char* argv0) {

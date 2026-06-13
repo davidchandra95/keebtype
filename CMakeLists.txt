@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-set(KEEBTYPE_VERSION "0.1.0" CACHE STRING "Keebtype package version")
+set(KEEBTYPE_VERSION "0.2.0" CACHE STRING "Keebtype package version")
 
 project(keebtype
   VERSION ${KEEBTYPE_VERSION}
@@ -62,6 +62,7 @@ add_library(keebtype_core STATIC
   src/audio/mixer.cpp
   src/platform/paths.cpp
   src/soundpack/soundpack.cpp
+  src/soundpack/soundpack_store.cpp
 )
 
 target_include_directories(keebtype_core PUBLIC
@@ -133,6 +134,7 @@ elseif(WIN32)
     user32
     shell32
     gdi32
+    ole32
   )
 else()
   target_sources(keebtype PRIVATE

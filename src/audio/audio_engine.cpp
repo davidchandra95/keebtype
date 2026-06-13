@@ -65,9 +65,8 @@ AudioEngine::~AudioEngine() {
   shutdown();
 }
 
-AudioEngine::InitResult AudioEngine::create(const Soundpack& soundpack) {
-  InitResult result;
-
+AudioEngine::PrepareResult AudioEngine::prepare(const Soundpack& soundpack) {
+  PrepareResult result;
   auto decode = decodeOggFile(soundpack.sound_file);
   if (!decode.ok()) {
     result.error = decode.error;
@@ -80,8 +79,25 @@ AudioEngine::InitResult AudioEngine::create(const Soundpack& soundpack) {
     return result;
   }
 
+  result.prepared = PreparedSoundpack{
+      std::move(decode.audio),
+      std::move(*resolved.soundpack),
+      soundpack.name};
+  return result;
+}
+
+AudioEngine::InitResult AudioEngine::create(const Soundpack& soundpack) {
+  auto prepared = prepare(soundpack);
+  if (!prepared.ok()) {
+    return InitResult{nullptr, prepared.error};
+  }
+  return create(std::move(*prepared.prepared));
+}
+
+AudioEngine::InitResult AudioEngine::create(PreparedSoundpack prepared) {
+  InitResult result;
   auto engine = std::unique_ptr<AudioEngine>(
-      new AudioEngine(std::move(decode.audio), std::move(*resolved.soundpack), soundpack.name));
+      new AudioEngine(std::move(prepared.audio), std::move(prepared.soundpack), std::move(prepared.soundpack_name)));
 
   std::string device_error;
   if (!engine->initDevice(&device_error)) {

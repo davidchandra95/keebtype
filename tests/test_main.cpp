@@ -5,9 +5,11 @@
 #include <string>
 #include <vector>
 
+#include "keebtype/audio/audio_engine.hpp"
 #include "keebtype/audio/mixer.hpp"
 #include "keebtype/input/key_codes.hpp"
 #include "keebtype/soundpack/soundpack.hpp"
+#include "keebtype/soundpack/soundpack_store.hpp"
 
 namespace {
 
@@ -28,8 +30,28 @@ std::filesystem::path tempRoot(const std::string& name) {
 }
 
 void writeFile(const std::filesystem::path& path, const std::string& data) {
+  std::filesystem::create_directories(path.parent_path());
   std::ofstream file(path, std::ios::binary);
   file << data;
+}
+
+void writeSingleSoundpack(
+    const std::filesystem::path& root,
+    const std::string& id,
+    const std::string& name,
+    const std::string& sound = "sound.ogg") {
+  std::filesystem::create_directories(root);
+  writeFile(root / sound, "placeholder");
+  writeFile(
+      root / "config.json",
+      R"json({
+        "id": ")json" + id + R"json(",
+        "name": ")json" + name + R"json(",
+        "version": 1,
+        "key_define_type": "single",
+        "sound": ")json" + sound + R"json(",
+        "defines": { "57": [0, 10] }
+      })json");
 }
 
 void testLoadsBundledSoundpack() {
@@ -42,6 +64,7 @@ void testLoadsBundledSoundpack() {
 
   check(result.pack->id == "sound-pack-1200000000005", "bundled soundpack id should match");
   check(result.pack->name == "CherryMX Brown - ABS keycaps", "bundled soundpack name should match");
+  check(result.pack->version == 1, "bundled soundpack version should default to v1");
   check(result.pack->is_default, "bundled soundpack should be default");
   check(result.pack->sound_file.filename() == "sound.ogg", "bundled soundpack should point at sound.ogg");
   check(!result.pack->slices.empty(), "bundled soundpack should include slices");
@@ -67,6 +90,74 @@ void testRejectsMissingSoundFile() {
       })json");
   auto result = keebtype::loadSoundpack(root);
   check(!result.ok(), "missing sound file should fail");
+}
+
+void testRejectsUnsupportedVersion() {
+  const auto root = tempRoot("unsupported-version");
+  writeFile(root / "sound.ogg", "placeholder");
+  writeFile(
+      root / "config.json",
+      R"json({
+        "id": "pack",
+        "name": "Pack",
+        "version": 2,
+        "key_define_type": "single",
+        "sound": "sound.ogg",
+        "defines": { "57": [0, 10] }
+      })json");
+  auto result = keebtype::loadSoundpack(root);
+  check(!result.ok(), "unsupported config version should fail");
+}
+
+void testRejectsMultiFileDefines() {
+  const auto root = tempRoot("multi-file-defines");
+  writeFile(root / "sound.ogg", "placeholder");
+  writeFile(
+      root / "config.json",
+      R"json({
+        "id": "pack",
+        "name": "Pack",
+        "version": 1,
+        "key_define_type": "multi",
+        "sound": "sound.ogg",
+        "defines": { "57": "space.ogg" }
+      })json");
+  auto result = keebtype::loadSoundpack(root);
+  check(!result.ok(), "v1 multi-file defines should fail");
+}
+
+void testRejectsUnsafeSoundPath() {
+  const auto root = tempRoot("unsafe-sound-path");
+  writeFile(root.parent_path() / "sound.ogg", "placeholder");
+  writeFile(
+      root / "config.json",
+      R"json({
+        "id": "pack",
+        "name": "Pack",
+        "version": 1,
+        "key_define_type": "single",
+        "sound": "../sound.ogg",
+        "defines": { "57": [0, 10] }
+      })json");
+  auto result = keebtype::loadSoundpack(root);
+  check(!result.ok(), "sound path escaping the pack root should fail");
+}
+
+void testRejectsNonOggSoundFile() {
+  const auto root = tempRoot("non-ogg-sound");
+  writeFile(root / "sound.mp3", "placeholder");
+  writeFile(
+      root / "config.json",
+      R"json({
+        "id": "pack",
+        "name": "Pack",
+        "version": 1,
+        "key_define_type": "single",
+        "sound": "sound.mp3",
+        "defines": { "57": [0, 10] }
+      })json");
+  auto result = keebtype::loadSoundpack(root);
+  check(!result.ok(), "non-OGG primary sound file should fail");
 }
 
 void testRejectsNegativeSlice() {
@@ -114,6 +205,81 @@ void testSliceBoundsValidationAndFallback() {
 
   auto overflow = keebtype::resolveSoundpackSlices(*loaded.pack, 1000, 45);
   check(!overflow.ok(), "slice past decoded audio should fail");
+}
+
+void testAudioPreparationRejectsInvalidOgg() {
+  const auto root = tempRoot("invalid-ogg");
+  writeSingleSoundpack(root, "pack", "Pack");
+  auto loaded = keebtype::loadSoundpack(root);
+  check(loaded.ok(), "synthetic invalid OGG pack should pass metadata validation: " + loaded.error);
+  if (!loaded.ok()) {
+    return;
+  }
+
+  auto prepared = keebtype::AudioEngine::prepare(*loaded.pack);
+  check(!prepared.ok(), "audio preparation should reject invalid OGG data");
+}
+
+void testStoreScansPersistsAndFallsBack() {
+  const auto app_data = tempRoot("store-app-data");
+  const auto bundled_root = std::filesystem::path(KEEBTYPE_SOURCE_DIR) / "soundpacks" / "cherrymx-brown-abs";
+  keebtype::SoundpackStore store({bundled_root}, app_data);
+  store.reload();
+
+  auto bundled = store.findById("sound-pack-1200000000005");
+  check(bundled.has_value(), "store should scan bundled soundpacks");
+  check(
+      bundled.has_value() && bundled->location == keebtype::SoundpackLocation::Bundled,
+      "bundled soundpack should be marked bundled");
+
+  auto persisted = store.persistSelectedSoundpackId("missing-pack");
+  check(persisted.ok, "store should persist selected soundpack id: " + persisted.error);
+
+  keebtype::SoundpackStore reloaded({bundled_root}, app_data);
+  reloaded.reload();
+  check(reloaded.selectedSoundpackId() == "missing-pack", "store should reload selected soundpack id");
+  auto fallback = reloaded.selectedOrDefault();
+  check(
+      fallback.has_value() && fallback->pack.id == "sound-pack-1200000000005",
+      "missing selected pack should fall back to bundled default");
+}
+
+void testStoreImportsRejectsDuplicatesAndDeletesImportedOnly() {
+  const auto app_data = tempRoot("store-import-app");
+  const auto bundled_root = std::filesystem::path(KEEBTYPE_SOURCE_DIR) / "soundpacks" / "cherrymx-brown-abs";
+  keebtype::SoundpackStore store({bundled_root}, app_data);
+  store.reload();
+
+  const auto imported_source = tempRoot("store-import-source");
+  writeSingleSoundpack(imported_source, "custom-pack", "Custom Pack");
+  auto imported = store.importSoundpackFolder(imported_source);
+  check(imported.ok(), "store should import a valid folder soundpack: " + imported.error);
+  check(
+      imported.ok() && imported.entry->location == keebtype::SoundpackLocation::Imported,
+      "imported soundpack should be marked imported");
+  check(
+      imported.ok() && std::filesystem::exists(imported.entry->pack.root / "config.json"),
+      "import should copy config.json into app data");
+
+  const auto duplicate_imported_source = tempRoot("store-import-duplicate-source");
+  writeSingleSoundpack(duplicate_imported_source, "custom-pack", "Duplicate Custom Pack");
+  auto duplicate_imported = store.importSoundpackFolder(duplicate_imported_source);
+  check(!duplicate_imported.ok(), "store should reject duplicate imported soundpack ids");
+
+  const auto bundled_collision_source = tempRoot("store-import-bundled-collision");
+  writeSingleSoundpack(
+      bundled_collision_source,
+      "sound-pack-1200000000005",
+      "Bundled Collision");
+  auto bundled_collision = store.importSoundpackFolder(bundled_collision_source);
+  check(!bundled_collision.ok(), "store should reject imported ids that collide with bundled packs");
+
+  auto delete_bundled = store.deleteImportedSoundpack("sound-pack-1200000000005");
+  check(!delete_bundled.ok, "store should not delete bundled soundpacks");
+
+  auto deleted = store.deleteImportedSoundpack("custom-pack");
+  check(deleted.ok, "store should delete imported soundpack: " + deleted.error);
+  check(!store.findById("custom-pack").has_value(), "deleted imported soundpack should leave store");
 }
 
 void testMixerPlaysAndOverlapsWithoutAllocatingInMixPath() {
@@ -186,8 +352,15 @@ int main() {
   testLoadsBundledSoundpack();
   testRejectsInvalidJson();
   testRejectsMissingSoundFile();
+  testRejectsUnsupportedVersion();
+  testRejectsMultiFileDefines();
+  testRejectsUnsafeSoundPath();
+  testRejectsNonOggSoundFile();
   testRejectsNegativeSlice();
   testSliceBoundsValidationAndFallback();
+  testAudioPreparationRejectsInvalidOgg();
+  testStoreScansPersistsAndFallsBack();
+  testStoreImportsRejectsDuplicatesAndDeletesImportedOnly();
   testMixerPlaysAndOverlapsWithoutAllocatingInMixPath();
   testMixerVolumeControlsOutputGain();
   testQueueDropsWhenFull();

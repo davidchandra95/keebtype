@@ -14,10 +14,24 @@ class MacTrayApp;
 - (instancetype)initWithOwner:(void*)owner;
 - (void)toggleEnabled:(id)sender;
 - (void)setVolume:(id)sender;
+- (void)selectSoundpack:(id)sender;
+- (void)importSoundpack:(id)sender;
+- (void)deleteSoundpack:(id)sender;
 - (void)quit:(id)sender;
 @end
 
 namespace keebtype {
+
+static std::string utf8String(NSString* value) {
+  if (value == nil) {
+    return {};
+  }
+  const char* raw = [value UTF8String];
+  if (raw == nullptr) {
+    return {};
+  }
+  return raw;
+}
 
 class MacTrayApp final : public TrayApp {
  public:
@@ -83,6 +97,16 @@ class MacTrayApp final : public TrayApp {
 
     [menu_ addItem:[NSMenuItem separatorItem]];
 
+    soundpack_menu_ = [[NSMenu alloc] initWithTitle:@"Soundpacks"];
+    NSMenuItem* soundpack_item = [[NSMenuItem alloc]
+        initWithTitle:@"Soundpacks"
+               action:nil
+        keyEquivalent:@""];
+    soundpack_item.submenu = soundpack_menu_;
+    [menu_ addItem:soundpack_item];
+
+    [menu_ addItem:[NSMenuItem separatorItem]];
+
     NSMenuItem* quit_item = [[NSMenuItem alloc]
         initWithTitle:@"Quit"
                action:@selector(quit:)
@@ -91,6 +115,42 @@ class MacTrayApp final : public TrayApp {
     [menu_ addItem:quit_item];
 
     status_item_.menu = menu_;
+    refresh();
+  }
+
+  void selectSoundpackFromMenu(const std::string& id) {
+    if (callbacks_.select_soundpack) {
+      callbacks_.select_soundpack(id);
+    }
+    refresh();
+  }
+
+  void importSoundpackFromMenu() {
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = NO;
+    panel.canChooseDirectories = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.prompt = @"Import";
+    panel.message = @"Choose an extracted Mechvibes config-v1 soundpack folder.";
+
+    if ([panel runModal] == NSModalResponseOK && panel.URL != nil) {
+      if (callbacks_.import_soundpack_folder) {
+        callbacks_.import_soundpack_folder(std::filesystem::path(utf8String(panel.URL.path)));
+      }
+    }
+    refresh();
+  }
+
+  void deleteSoundpackFromMenu(const std::string& id, NSString* name) {
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @"Delete imported soundpack?";
+    alert.informativeText = [NSString stringWithFormat:@"Delete \"%@\" from Keebtype?", name ?: @""];
+    [alert addButtonWithTitle:@"Delete"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    if ([alert runModal] == NSAlertFirstButtonReturn && callbacks_.delete_imported_soundpack) {
+      callbacks_.delete_imported_soundpack(id);
+    }
     refresh();
   }
 
@@ -116,6 +176,8 @@ class MacTrayApp final : public TrayApp {
   }
 
   void refresh() {
+    rebuildSoundpackMenu();
+
     const bool enabled = callbacks_.is_enabled ? callbacks_.is_enabled() : false;
     enabled_item_.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
 
@@ -132,12 +194,82 @@ class MacTrayApp final : public TrayApp {
   }
 
  private:
+  void rebuildSoundpackMenu() {
+    if (soundpack_menu_ == nil) {
+      return;
+    }
+
+    [soundpack_menu_ removeAllItems];
+    const auto soundpacks = callbacks_.soundpacks ? callbacks_.soundpacks() : std::vector<TraySoundpackItem>{};
+    if (soundpacks.empty()) {
+      NSMenuItem* empty_item = [[NSMenuItem alloc]
+          initWithTitle:@"No soundpacks found"
+                 action:nil
+          keyEquivalent:@""];
+      empty_item.enabled = NO;
+      [soundpack_menu_ addItem:empty_item];
+    } else {
+      for (const auto& soundpack : soundpacks) {
+        NSMenuItem* item = [[NSMenuItem alloc]
+            initWithTitle:[NSString stringWithUTF8String:soundpack.name.c_str()]
+                   action:@selector(selectSoundpack:)
+            keyEquivalent:@""];
+        item.target = delegate_;
+        item.representedObject = [NSString stringWithUTF8String:soundpack.id.c_str()];
+        item.state = soundpack.current ? NSControlStateValueOn : NSControlStateValueOff;
+        [soundpack_menu_ addItem:item];
+      }
+    }
+
+    [soundpack_menu_ addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem* import_item = [[NSMenuItem alloc]
+        initWithTitle:@"Import Soundpack Folder..."
+               action:@selector(importSoundpack:)
+        keyEquivalent:@""];
+    import_item.target = delegate_;
+    [soundpack_menu_ addItem:import_item];
+
+    delete_soundpack_menu_ = [[NSMenu alloc] initWithTitle:@"Delete Imported Soundpack"];
+    bool has_imported = false;
+    for (const auto& soundpack : soundpacks) {
+      if (!soundpack.imported) {
+        continue;
+      }
+      has_imported = true;
+      NSMenuItem* item = [[NSMenuItem alloc]
+          initWithTitle:[NSString stringWithUTF8String:soundpack.name.c_str()]
+                 action:@selector(deleteSoundpack:)
+          keyEquivalent:@""];
+      item.target = delegate_;
+      item.representedObject = [NSString stringWithUTF8String:soundpack.id.c_str()];
+      [delete_soundpack_menu_ addItem:item];
+    }
+    if (!has_imported) {
+      NSMenuItem* empty_item = [[NSMenuItem alloc]
+          initWithTitle:@"No imported soundpacks"
+                 action:nil
+          keyEquivalent:@""];
+      empty_item.enabled = NO;
+      [delete_soundpack_menu_ addItem:empty_item];
+    }
+
+    NSMenuItem* delete_item = [[NSMenuItem alloc]
+        initWithTitle:@"Delete Imported Soundpack"
+               action:nil
+        keyEquivalent:@""];
+    delete_item.submenu = delete_soundpack_menu_;
+    [soundpack_menu_ addItem:delete_item];
+  }
+
   std::string app_name_;
   TrayCallbacks callbacks_;
   KeebtypeTrayDelegate* delegate_ = nil;
   NSStatusItem* status_item_ = nil;
   NSMenu* menu_ = nil;
   NSMenu* volume_menu_ = nil;
+  NSMenu* soundpack_menu_ = nil;
+  NSMenu* delete_soundpack_menu_ = nil;
   NSMenuItem* enabled_item_ = nil;
   NSMenuItem* status_item_text_ = nil;
 };
@@ -172,6 +304,22 @@ std::unique_ptr<TrayApp> createTrayApp(std::string app_name) {
 
 - (void)setVolume:(id)sender {
   static_cast<keebtype::MacTrayApp*>(owner_)->setVolumeFromMenu(static_cast<int>([sender tag]));
+}
+
+- (void)selectSoundpack:(id)sender {
+  NSString* identifier = [sender representedObject];
+  static_cast<keebtype::MacTrayApp*>(owner_)->selectSoundpackFromMenu(keebtype::utf8String(identifier));
+}
+
+- (void)importSoundpack:(id)sender {
+  (void)sender;
+  static_cast<keebtype::MacTrayApp*>(owner_)->importSoundpackFromMenu();
+}
+
+- (void)deleteSoundpack:(id)sender {
+  NSString* identifier = [sender representedObject];
+  NSString* name = [sender title];
+  static_cast<keebtype::MacTrayApp*>(owner_)->deleteSoundpackFromMenu(keebtype::utf8String(identifier), name);
 }
 
 - (void)quit:(id)sender {

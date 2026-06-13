@@ -19,6 +19,7 @@ class LinuxTrayApp final : public TrayApp {
     callbacks_ = std::move(callbacks);
     std::cerr << app_name_ << ": Linux tray/input is a v1 stub. "
               << "Global typing capture is not implemented on Linux yet.\n";
+    std::cerr << app_name_ << ": Tray soundpack import/delete is not implemented on Linux yet.\n";
     if (callbacks_.status_text) {
       std::cerr << app_name_ << ": " << callbacks_.status_text() << "\n";
     }

@@ -1,5 +1,7 @@
 #include "keebtype/soundpack/soundpack.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -36,6 +38,31 @@ bool parseKeyCode(const std::string& raw, int* out) {
 
   *out = static_cast<int>(value);
   return true;
+}
+
+bool isSafeRelativePath(const std::filesystem::path& path) {
+  if (path.empty() || path.is_absolute() || !path.root_name().empty()) {
+    return false;
+  }
+
+  for (const auto& part : path) {
+    if (part == "..") {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+std::string lowerString(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+bool hasOggExtension(const std::filesystem::path& path) {
+  return lowerString(path.extension().string()) == ".ogg";
 }
 
 std::uint64_t msToFrames(std::int64_t ms, std::uint32_t sample_rate) {
@@ -91,11 +118,47 @@ SoundpackLoadResult loadSoundpack(const std::filesystem::path& soundpack_dir) {
     return result;
   }
 
+  const auto version_it = parsed.find("version");
+  if (version_it != parsed.end()) {
+    if (!version_it->is_number_integer()) {
+      result.error = "soundpack field is invalid: version";
+      return result;
+    }
+    pack.version = version_it->get<int>();
+    if (pack.version != 1) {
+      result.error = "unsupported soundpack config version: " + std::to_string(pack.version);
+      return result;
+    }
+  }
+
+  const auto key_define_type_it = parsed.find("key_define_type");
+  if (key_define_type_it != parsed.end()) {
+    if (!key_define_type_it->is_string()) {
+      result.error = "soundpack field is invalid: key_define_type";
+      return result;
+    }
+    const auto key_define_type = key_define_type_it->get<std::string>();
+    if (key_define_type != "single") {
+      result.error = "unsupported soundpack key_define_type: " + key_define_type;
+      return result;
+    }
+  }
+
   std::string sound_file_name;
   if (!getString("sound", &sound_file_name)) {
     return result;
   }
-  pack.sound_file = (pack.root / sound_file_name).lexically_normal();
+  const auto sound_raw_path = std::filesystem::path(sound_file_name);
+  if (!isSafeRelativePath(sound_raw_path)) {
+    result.error = "soundpack sound path must stay inside the soundpack directory";
+    return result;
+  }
+  const auto sound_relative_path = sound_raw_path.lexically_normal();
+  if (!hasOggExtension(sound_relative_path)) {
+    result.error = "soundpack primary audio file must be an OGG file: " + sound_file_name;
+    return result;
+  }
+  pack.sound_file = (pack.root / sound_relative_path).lexically_normal();
   if (!std::filesystem::exists(pack.sound_file)) {
     result.error = "soundpack audio file does not exist: " + pathString(pack.sound_file);
     return result;
