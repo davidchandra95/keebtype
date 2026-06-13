@@ -16,6 +16,7 @@ constexpr UINT_PTR kTrayId = 1;
 constexpr UINT kMenuEnabled = 1001;
 constexpr UINT kMenuQuit = 1002;
 constexpr UINT kMenuVolumeBase = 1100;
+constexpr WORD kDefaultResourceId = 32512;
 constexpr std::array<int, 5> kVolumeLevels = {25, 50, 55, 75, 100};
 
 std::wstring widen(const std::string& value) {
@@ -49,7 +50,7 @@ class WindowsTrayApp final : public TrayApp {
     wc.lpfnWndProc = &WindowsTrayApp::windowProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = class_name.c_str();
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(kDefaultResourceId));
     RegisterClassExW(&wc);
 
     hwnd_ = CreateWindowExW(
@@ -155,7 +156,7 @@ class WindowsTrayApp final : public TrayApp {
     nid_.uID = kTrayId;
     nid_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid_.uCallbackMessage = kTrayMessage;
-    nid_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    nid_.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(kDefaultResourceId));
     updateTipBuffer();
     Shell_NotifyIconW(NIM_ADD, &nid_);
   }
